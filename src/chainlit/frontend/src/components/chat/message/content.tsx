@@ -1,11 +1,15 @@
+import { memo } from 'react';
 import { ReactMarkdown } from 'react-markdown/lib/react-markdown';
 import remarkGfm from 'remark-gfm';
-import { Typography, Link, Stack } from '@mui/material';
-import { IElements } from 'state/element';
-import { memo } from 'react';
-import { IAction } from 'state/action';
-import ElementRef from 'components/element/ref';
+
+import { Box, Link, Stack, Typography } from '@mui/material';
+
 import Code from 'components/Code';
+import ElementRef from 'components/element/ref';
+
+import { IAction } from 'state/action';
+import { IElements } from 'state/element';
+
 import InlinedElements from './inlined';
 
 interface Props {
@@ -17,8 +21,28 @@ interface Props {
   authorIsUser?: boolean;
 }
 
+const isForIdMatch = (
+  id: string | number | undefined,
+  forIds: string[] | undefined
+) => {
+  if (!forIds || !forIds.length || !id) {
+    return false;
+  }
+
+  return forIds.includes(id.toString());
+};
+
+const isGlobalMatch = (forIds: string[] | undefined) => {
+  return !forIds || !forIds.length;
+};
+
 function prepareContent({ id, elements, actions, content, language }: Props) {
-  const elementNames = elements.map((e) => e.name);
+  const elementNames = elements
+    .filter((e) => e.type !== 'avatar')
+    .map((e) => e.name);
+
+  // Sort by descending length to avoid matching substrings
+  elementNames.sort((a, b) => b.length - a.length);
 
   const elementRegexp = elementNames.length
     ? new RegExp(`(${elementNames.join('|')})`, 'g')
@@ -33,22 +57,23 @@ function prepareContent({ id, elements, actions, content, language }: Props) {
 
   let preparedContent = content ? content.trim() : '';
   const inlinedElements: IElements = elements.filter(
-    (e) => e.forId === id && e.display === 'inline'
+    (e) => isForIdMatch(id, e?.forIds) && e.display === 'inline'
   );
   const refElements: IElements = [];
 
   if (elementRegexp) {
     preparedContent = preparedContent.replaceAll(elementRegexp, (match) => {
-      const element = elements.find((e) => e.name === match);
+      const element = elements.find((e) => {
+        const nameMatch = e.name === match;
+        const scopeMatch =
+          isGlobalMatch(e?.forIds) || isForIdMatch(id, e?.forIds);
+        return nameMatch && scopeMatch;
+      });
       const foundElement = !!element;
-      const wrongScope = element?.forId && element.forId !== id;
+
       const inlined = element?.display === 'inline';
       if (!foundElement) {
         // Element reference does not exist, return plain text
-        return match;
-      }
-      if (wrongScope) {
-        // If element is not global and not scoped to this message, return plain text
         return match;
       } else if (inlined) {
         // If element is inlined, add it to the list and return plain text
@@ -106,6 +131,7 @@ export default memo(function MessageContent({
           fontFamily: 'Inter',
           fontWeight: authorIsUser ? 500 : 300
         }}
+        component="div"
       >
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}

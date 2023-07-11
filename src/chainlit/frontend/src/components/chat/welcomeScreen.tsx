@@ -1,14 +1,17 @@
-import { Box, Link } from '@mui/material';
-import { useRecoilValue } from 'recoil';
-import { projectSettingsState } from 'state/project';
 import { ReactMarkdown } from 'react-markdown/lib/react-markdown';
+import { useRecoilValue } from 'recoil';
 import remarkGfm from 'remark-gfm';
+
+import { Box, Link } from '@mui/material';
+
 import Code from 'components/Code';
+
+import { projectSettingsState } from 'state/project';
 
 const WelcomeScreen = () => {
   const pSettings = useRecoilValue(projectSettingsState);
 
-  if (!pSettings?.chainlitMd) {
+  if (!pSettings?.markdown) {
     return <Box flexGrow={1} />;
   }
 
@@ -29,7 +32,7 @@ const WelcomeScreen = () => {
           flexDirection: 'column'
         }}
       >
-        {pSettings?.chainlitMd ? (
+        {pSettings?.markdown ? (
           <ReactMarkdown
             remarkPlugins={[remarkGfm]}
             components={{
@@ -45,7 +48,7 @@ const WelcomeScreen = () => {
               }
             }}
           >
-            {pSettings?.chainlitMd}
+            {pSettings?.markdown}
           </ReactMarkdown>
         ) : null}
       </Box>

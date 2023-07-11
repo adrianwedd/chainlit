@@ -1,3 +1,9 @@
+import { useFormik } from 'formik';
+import { toast } from 'react-hot-toast';
+import { useNavigate } from 'react-router-dom';
+import { useRecoilState, useRecoilValue } from 'recoil';
+import * as yup from 'yup';
+
 import {
   Alert,
   Box,
@@ -6,25 +12,18 @@ import {
   TextField,
   Typography
 } from '@mui/material';
+
 import TopBar from 'components/header';
-import { useFormik } from 'formik';
-import { toast } from 'react-hot-toast';
-import { useNavigate } from 'react-router-dom';
-import { useRecoilState, useRecoilValue } from 'recoil';
+
 import { projectSettingsState } from 'state/project';
 import { userEnvState } from 'state/user';
-import * as yup from 'yup';
 
 export default function Env() {
   const [userEnv, setUserEnv] = useRecoilState(userEnvState);
   const pSettings = useRecoilValue(projectSettingsState);
   const navigate = useNavigate();
 
-  if (!pSettings?.userEnv || !pSettings?.userEnv) {
-    return null;
-  }
-
-  const requiredKeys = pSettings.userEnv;
+  const requiredKeys = pSettings?.project.user_env || [];
 
   const initialValues: Record<string, string> = {};
   const _schema: Record<string, yup.StringSchema> = {};
@@ -46,6 +45,10 @@ export default function Env() {
       navigate('/');
     }
   });
+
+  if (requiredKeys.length === 0) {
+    navigate('/');
+  }
 
   const renderInput = (key: string) => {
     return (

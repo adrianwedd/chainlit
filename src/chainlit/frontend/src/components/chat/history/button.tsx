@@ -1,6 +1,10 @@
 /* eslint-disable @typescript-eslint/ban-ts-comment*/
+import { grey } from 'palette';
+import { useEffect, useRef, useState } from 'react';
+import { useRecoilState } from 'recoil';
 
 import KeyboardDoubleArrowUpIcon from '@mui/icons-material/KeyboardDoubleArrowUp';
+import SearchOutlined from '@mui/icons-material/SearchOutlined';
 import {
   IconButton,
   Menu,
@@ -9,10 +13,8 @@ import {
   Tooltip,
   Typography
 } from '@mui/material';
-import { useRecoilState } from 'recoil';
+
 import { IChat, historyOpenedState } from 'state/chat';
-import { useEffect, useRef, useState } from 'react';
-import SearchOutlined from '@mui/icons-material/SearchOutlined';
 
 interface Props {
   onClick: (content: string) => void;
@@ -24,7 +26,7 @@ function buildHistory(chats?: IChat[]) {
   const history: Record<
     string,
     {
-      key: number;
+      key: number | string;
       hour: string;
       content: string;
     }[]
@@ -51,7 +53,7 @@ function buildHistory(chats?: IChat[]) {
     history[date].push({
       key: c.createdAt,
       hour: new Date(c.createdAt).toLocaleTimeString(undefined, timeOptions),
-      content: c.messages[0].content
+      content: c.messages[0].content!
     });
   });
 
@@ -141,7 +143,7 @@ export default function HistoryButton({ onClick, onOpen, chats }: Props) {
               p: 1,
               fontSize: '10px',
               fontWeight: 700,
-              color: '#9E9E9E'
+              color: grey[500]
             }}
           >
             {date}

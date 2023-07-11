@@ -1,10 +1,12 @@
-import { LoadingButton } from '@mui/lab';
-import { Tooltip } from '@mui/material';
-import { IAction } from 'state/action';
+import { useCallback } from 'react';
 import { toast } from 'react-hot-toast';
 import { useRecoilValue } from 'recoil';
+
+import { LoadingButton } from '@mui/lab';
+import { Tooltip } from '@mui/material';
+
+import { IAction } from 'state/action';
 import { loadingState, sessionState } from 'state/chat';
-import { useCallback } from 'react';
 
 interface Props {
   action: IAction;
@@ -21,7 +23,7 @@ export default function ActionRef({ action }: Props) {
       if (!sessionId) {
         return;
       }
-      session?.socket.emit('call_action', action);
+      session?.socket.emit('action_call', action);
     } catch (err) {
       if (err instanceof Error) {
         toast.error(err.message);

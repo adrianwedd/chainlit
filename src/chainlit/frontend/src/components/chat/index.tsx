@@ -1,23 +1,29 @@
-import { Alert, Box } from '@mui/material';
-import MessageContainer from './message/container';
+import { useCallback, useState } from 'react';
 import { useRecoilState, useRecoilValue } from 'recoil';
+
+import { Alert, Box } from '@mui/material';
+
+import WelcomeScreen from 'components/chat/welcomeScreen';
+import SideView from 'components/element/sideView';
+import ErrorBoundary from 'components/errorBoundary';
+import Playground from 'components/playground';
+import TaskList from 'components/tasklist';
+
+import { useAuth } from 'hooks/auth';
+import useLocalChatHistory from 'hooks/localChatHistory';
+
+import { actionState } from 'state/action';
 import {
   IMessage,
   askUserState,
   messagesState,
   sessionState
 } from 'state/chat';
-import Playground from 'components/playground';
-import SideView from 'components/element/sideView';
-import InputBox from './inputBox';
-import { useCallback, useState } from 'react';
+import { ITasklistElement, elementState } from 'state/element';
 import { projectSettingsState } from 'state/project';
-import { useAuth } from 'hooks/auth';
-import useLocalChatHistory from 'hooks/localChatHistory';
-import { actionState } from 'state/action';
-import WelcomeScreen from 'components/chat/welcomeScreen';
-import { elementState } from 'state/element';
-import ErrorBoundary from 'components/errorBoundary';
+
+import InputBox from './inputBox';
+import MessageContainer from './message/container';
 
 const Chat = () => {
   const { user, isAuthenticated } = useAuth();
@@ -45,13 +51,13 @@ const Chat = () => {
         createdAt: Date.now()
       };
 
-      if (!isAuthenticated || !pSettings?.projectId) {
+      if (!isAuthenticated || !pSettings?.project?.id) {
         persistChatLocally(msg);
       }
 
       setAutoScroll(true);
       setMessages((oldMessages) => [...oldMessages, message]);
-      session?.socket.emit('message', message);
+      session?.socket.emit('ui_message', message);
     },
     [user, session, isAuthenticated, pSettings]
   );
@@ -74,16 +80,23 @@ const Chat = () => {
     [askUser, user]
   );
 
+  const tasklist = elements.findLast((e) => e.type === 'tasklist') as
+    | ITasklistElement
+    | undefined;
+
   return (
     <Box display="flex" width="100%" height="0" flexGrow={1}>
       <Playground />
+      <TaskList tasklist={tasklist} isMobile={false} />
       <Box
         display="flex"
         flexDirection="column"
         width="100%"
         boxSizing="border-box"
         px={2}
+        flexGrow={1}
       >
+        <TaskList tasklist={tasklist} isMobile={true} />
         <Box my={1} />
         {session?.error && (
           <Alert severity="error">Could not reach the server.</Alert>

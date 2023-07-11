@@ -1,3 +1,5 @@
+import { grey } from 'palette';
+
 import { Box, BoxProps } from '@mui/material/';
 
 export default function ElementFrame(props: BoxProps) {
@@ -7,7 +9,7 @@ export default function ElementFrame(props: BoxProps) {
         p: 1,
         boxSizing: 'border-box',
         bgcolor: (theme) =>
-          theme.palette.mode === 'light' ? '#EEEEEE' : '#212121',
+          theme.palette.mode === 'light' ? grey[200] : grey[900],
         borderRadius: '4px',
         display: 'flex'
       }}

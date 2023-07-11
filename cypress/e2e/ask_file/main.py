@@ -2,18 +2,25 @@ import chainlit as cl
 
 
 @cl.on_chat_start
-def start():
-    file = None
-
-    # Wait for the user to upload a file
-    while file == None:
-        file = cl.AskFileMessage(
-            content="Please upload a text file to begin!", accept=["text/plain"]
-        ).send()
+async def start():
+    files = await cl.AskFileMessage(
+        content="Please upload a text file to begin!", accept=["text/plain"]
+    ).send()
+    txt_file = files[0]
     # Decode the file
-    text = file.content.decode("utf-8")
+    text = txt_file.content.decode("utf-8")
 
-    # Let the user know that the system is ready
-    cl.Message(
-        content=f"`{file.name}` uploaded, it contains {len(text)} characters!"
+    await cl.Message(
+        content=f"`Text file {txt_file.name}` uploaded, it contains {len(text)} characters!"
+    ).send()
+
+    files = await cl.AskFileMessage(
+        content="Please upload a python file to begin!", accept={"text/plain": [".py"]}
+    ).send()
+    py_file = files[0]
+    # Decode the file
+    text = py_file.content.decode("utf-8")
+
+    await cl.Message(
+        content=f"`Python file {py_file.name}` uploaded, it contains {len(text)} characters!"
     ).send()

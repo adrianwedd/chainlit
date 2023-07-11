@@ -1,8 +1,11 @@
+import { useRecoilState, useRecoilValue } from 'recoil';
+
 import CloseIcon from '@mui/icons-material/Close';
 import { Box } from '@mui/material';
-import { useRecoilState, useRecoilValue } from 'recoil';
-import { loadingState, sessionState } from 'state/chat';
+
 import GreyButton from 'components/greyButton';
+
+import { loadingState, sessionState } from 'state/chat';
 
 export default function StopButton() {
   const [loading, setLoading] = useRecoilState(loadingState);
@@ -20,6 +23,7 @@ export default function StopButton() {
   return (
     <Box margin="auto">
       <GreyButton
+        id="stop-button"
         startIcon={<CloseIcon />}
         variant="contained"
         onClick={handleClick}

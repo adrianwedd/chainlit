@@ -1,14 +1,21 @@
+import { keyframes } from '@emotion/react';
+import { useEffect, useState } from 'react';
+import { useRecoilValue } from 'recoil';
+
 import { Box, Stack } from '@mui/material';
-import { INestedMessage } from 'state/chat';
-import { IElements } from 'state/element';
-import { useState } from 'react';
+
 import DetailsButton from 'components/chat/message/detailsButton';
+
 import { IAction } from 'state/action';
-import Messages from './messages';
-import MessageContent from './content';
-import UploadButton from './uploadButton';
+import { INestedMessage, highlightMessage } from 'state/chat';
+import { IElements } from 'state/element';
+import { settingsState } from 'state/settings';
+
 import Author, { authorBoxWidth } from './author';
 import Buttons from './buttons';
+import MessageContent from './content';
+import Messages from './messages';
+import UploadButton from './uploadButton';
 
 interface Props {
   message: INestedMessage;
@@ -21,6 +28,19 @@ interface Props {
   isLast?: boolean;
 }
 
+// Uses yellow[500] with 50% opacity
+const flash = keyframes`
+  from {
+    background-color: transparent;
+  }
+  25% {
+    background-color: rgba(255, 173, 51, 0.5);
+  }
+  to {
+    background-color: transparent;
+  }
+`;
+
 const Message = ({
   message,
   elements,
@@ -31,7 +51,19 @@ const Message = ({
   isRunning,
   isLast
 }: Props) => {
-  const [showDetails, setShowDetails] = useState(false);
+  const appSettings = useRecoilValue(settingsState);
+  const highlightedMessage = useRecoilValue(highlightMessage);
+  const [showDetails, setShowDetails] = useState(appSettings.expandAll);
+
+  useEffect(() => {
+    setShowDetails(appSettings.expandAll);
+  }, [appSettings.expandAll]);
+
+  if (appSettings.hideCot && indent) {
+    return null;
+  }
+
+  const messageId = message.id ? message.id.toString() : message.tempId;
 
   return (
     <Box
@@ -52,12 +84,17 @@ const Message = ({
         }}
       >
         <Stack
+          id={`message-${messageId}`}
           direction="row"
           ml={indent ? `${indent * (authorBoxWidth + 16)}px` : 0}
           sx={{
             py: 2,
             borderBottom: (theme) =>
-              showBorder ? `1px solid ${theme.palette.divider}` : 'none'
+              showBorder ? `1px solid ${theme.palette.divider}` : 'none',
+            animation:
+              highlightedMessage === messageId
+                ? `3s ease-in-out 0.1s ${flash}`
+                : 'none'
           }}
         >
           <Author message={message} show={showAvatar} />
@@ -66,7 +103,7 @@ const Message = ({
               authorIsUser={message.authorIsUser}
               actions={actions}
               elements={elements}
-              id={message.id ? message.id.toString() : message.tempId}
+              id={messageId}
               content={message.content}
               language={message.language}
             />

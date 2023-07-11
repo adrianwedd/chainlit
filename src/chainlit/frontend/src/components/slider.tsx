@@ -1,3 +1,5 @@
+import { white } from 'palette';
+
 import { InputLabel, Stack } from '@mui/material';
 import Slider, { SliderProps } from '@mui/material/Slider';
 import { styled } from '@mui/material/styles';
@@ -12,7 +14,7 @@ const StyledSlider = styled(Slider)({
   '& .MuiSlider-thumb': {
     height: 14,
     width: 14,
-    backgroundColor: '#fff',
+    backgroundColor: white,
     border: '2px solid currentColor',
     '&:focus, &:hover, &.Mui-active, &.Mui-focusVisible': {
       boxShadow: 'inherit'

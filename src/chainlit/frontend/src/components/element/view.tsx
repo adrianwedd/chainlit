@@ -1,22 +1,40 @@
-import { Box, Typography } from '@mui/material';
-import { Navigate, useParams } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useParams } from 'react-router-dom';
 import { useRecoilValue } from 'recoil';
+
+import { Box, Typography } from '@mui/material';
+
+import { useQuery } from 'hooks/query';
+
+import { clientState } from 'state/client';
 import {
-  elementState,
-  ElementType,
+  IAudioElement,
   IElement,
   IImageElement,
-  ITextElement
+  IPdfElement,
+  ITextElement,
+  IVideoElement,
+  elementState
 } from 'state/element';
-import TextElement from './text';
-import ImageElement from './image';
 
-export const renderElement = (element: IElement) => {
+import AudioElement from './audio';
+import ImageElement from './image';
+import PDFElement from './pdf';
+import TextElement from './text';
+import VideoElement from './video';
+
+export const renderElement = (element: IElement): JSX.Element | null => {
   switch (element.type) {
-    case ElementType.img:
+    case 'image':
       return <ImageElement element={element as IImageElement} />;
-    case ElementType.txt:
+    case 'text':
       return <TextElement element={element as ITextElement} />;
+    case 'pdf':
+      return <PDFElement element={element as IPdfElement} />;
+    case 'audio':
+      return <AudioElement element={element as IAudioElement} />;
+    case 'video':
+      return <VideoElement element={element as IVideoElement} />;
     default:
       return null;
   }
@@ -24,14 +42,40 @@ export const renderElement = (element: IElement) => {
 
 const ElementView = () => {
   const { id } = useParams();
+  const query = useQuery();
   const elements = useRecoilValue(elementState);
+  const client = useRecoilValue(clientState);
+  const [element, setElement] = useState<IElement | null>(null);
+  const [error, setError] = useState<string | undefined>();
 
-  const element = elements.find(
-    (element) => element.id == id || element.tempId == id
-  );
+  const conversationId = query.get('conversation');
 
-  if (!element) {
-    return <Navigate to="/" />;
+  useEffect(() => {
+    if (!id) {
+      return;
+    }
+
+    if (!conversationId) {
+      const element = elements.find(
+        (element) => element.id == Number(id) || element.tempId == id
+      );
+      if (element) {
+        setElement(element);
+      }
+    } else {
+      client
+        .getElement(conversationId, id)
+        .then((element) => {
+          setElement(element);
+        })
+        .catch((err) => {
+          setError(err.message);
+        });
+    }
+  }, [id, conversationId]);
+
+  if (!element || error) {
+    return null;
   }
 
   return (
@@ -45,11 +89,12 @@ const ElementView = () => {
       mx="auto"
       sx={{
         width: '100%',
-        maxWidth: '60rem'
+        maxWidth: '60rem',
+        color: 'text.primary'
       }}
       id="element-view"
     >
-      <Typography color="text.primary" fontWeight={700} fontSize="25px">
+      <Typography fontWeight={700} fontSize="25px">
         {element.name}
       </Typography>
       {renderElement(element)}

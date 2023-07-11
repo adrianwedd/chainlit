@@ -5,244 +5,324 @@ mimetypes.add_type("text/css", ".css")
 
 import os
 import json
-from flask_cors import CORS
-from flask import Flask, request, send_from_directory
-from flask_socketio import SocketIO, ConnectionRefusedError
-from chainlit.config import config
-from chainlit.lc.utils import run_langchain_agent
+import webbrowser
+from pathlib import Path
+
+
+from contextlib import asynccontextmanager
+from watchfiles import awatch
+
+from fastapi import FastAPI, Request
+from fastapi.responses import (
+    HTMLResponse,
+    JSONResponse,
+    FileResponse,
+    PlainTextResponse,
+)
+from fastapi_socketio import SocketManager
+from starlette.middleware.cors import CORSMiddleware
+import asyncio
+
+from chainlit.context import emitter_var, loop_var
+from chainlit.config import config, load_module, reload_config, DEFAULT_HOST
 from chainlit.session import Session, sessions
 from chainlit.user_session import user_sessions
-from chainlit.client import CloudClient
-from chainlit.sdk import Chainlit
+from chainlit.client.utils import (
+    get_db_client,
+    get_auth_client,
+    get_auth_client_from_request,
+    get_db_client_from_request,
+)
+from chainlit.emitter import ChainlitEmitter
 from chainlit.markdown import get_markdown_str
 from chainlit.action import Action
 from chainlit.message import Message, ErrorMessage
-from chainlit.telemetry import trace, trace_event
+from chainlit.telemetry import trace_event
+from chainlit.client.cloud import CloudAuthClient
 from chainlit.logger import logger
+from chainlit.types import (
+    CompletionRequest,
+    UpdateFeedbackRequest,
+    GetConversationsRequest,
+    DeleteConversationRequest,
+)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    host = config.run.host
+    port = config.run.port
+
+    if host == DEFAULT_HOST:
+        url = f"http://localhost:{port}"
+    else:
+        url = f"http://{host}:{port}"
+
+    logger.info(f"Your app is available at {url}")
+
+    if not config.run.headless:
+        # Add a delay before opening the browser
+        await asyncio.sleep(1)
+        webbrowser.open(url)
+
+    if config.project.database == "local":
+        from prisma import Client, register
+
+        client = Client()
+        register(client)
+        await client.connect()
+
+    watch_task = None
+    stop_event = asyncio.Event()
+
+    if config.run.watch:
+
+        async def watch_files_for_changes():
+            extensions = [".py"]
+            files = ["chainlit.md", "config.toml"]
+            async for changes in awatch(config.root, stop_event=stop_event):
+                for change_type, file_path in changes:
+                    file_name = os.path.basename(file_path)
+                    file_ext = os.path.splitext(file_name)[1]
+
+                    if file_ext.lower() in extensions or file_name.lower() in files:
+                        logger.info(
+                            f"File {change_type.name}: {file_name}. Reloading app..."
+                        )
+
+                        try:
+                            reload_config()
+                        except Exception as e:
+                            logger.error(f"Error reloading config: {e}")
+                            break
+
+                        # Reload the module if the module name is specified in the config
+                        if config.run.module_name:
+                            try:
+                                load_module(config.run.module_name)
+                            except Exception as e:
+                                logger.error(f"Error reloading module: {e}")
+                                break
+
+                        await socket.emit("reload", {})
+
+                        break
+
+        watch_task = asyncio.create_task(watch_files_for_changes())
+
+    try:
+        yield
+    finally:
+        if config.project.database == "local":
+            await client.disconnect()
+        if watch_task:
+            try:
+                stop_event.set()
+                watch_task.cancel()
+                await watch_task
+            except asyncio.exceptions.CancelledError:
+                pass
+
+        # Force exit the process to avoid potential AnyIO threads still running
+        os._exit(0)
+
 
 root_dir = os.path.dirname(os.path.abspath(__file__))
 build_dir = os.path.join(root_dir, "frontend/dist")
 
-app = Flask(__name__, static_folder=build_dir)
-CORS(app)
-socketio = SocketIO(
+app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Define max HTTP data size to 100 MB
+max_http_data_size = 100 * 1024 * 1024
+
+socket = SocketManager(
     app,
-    cors_allowed_origins="*",
-    async_mode="gevent",
-    max_http_buffer_size=1000000 * 100,
+    cors_allowed_origins=[],
+    async_mode="asgi",
+    max_http_buffer_size=max_http_data_size,
 )
 
 
-def inject_html_tags():
+# -------------------------------------------------------------------------------
+#                               HTTP HANDLERS
+# -------------------------------------------------------------------------------
+
+
+def get_html_template():
     PLACEHOLDER = "<!-- TAG INJECTION PLACEHOLDER -->"
 
     default_url = "https://github.com/Chainlit/chainlit"
-    url = config.github or default_url
+    url = config.ui.github or default_url
 
-    tags = f"""<title>{config.chatbot_name}</title>
-    <meta name="description" content="{config.description}">
+    tags = f"""<title>{config.ui.name}</title>
+    <meta name="description" content="{config.ui.description}">
     <meta property="og:type" content="website">
-    <meta property="og:title" content="{config.chatbot_name}">
-    <meta property="og:description" content="{config.description}">
+    <meta property="og:title" content="{config.ui.name}">
+    <meta property="og:description" content="{config.ui.description}">
     <meta property="og:image" content="https://chainlit-cloud.s3.eu-west-3.amazonaws.com/logo/chainlit_banner.png">
     <meta property="og:url" content="{url}">"""
 
-    orig_index_html_file_path = os.path.join(app.static_folder, "index.html")
-    injected_index_html_file_path = os.path.join(app.static_folder, "_index.html")
+    index_html_file_path = os.path.join(build_dir, "index.html")
 
-    with open(orig_index_html_file_path, "r", encoding="utf-8") as f:
+    with open(index_html_file_path, "r", encoding="utf-8") as f:
         content = f.read()
-    content = content.replace(PLACEHOLDER, tags)
-
-    with open(injected_index_html_file_path, "w", encoding="utf-8") as f:
-        f.write(content)
+        content = content.replace(PLACEHOLDER, tags)
+        return content
 
 
-inject_html_tags()
+html_template = get_html_template()
 
 
-@app.route("/", defaults={"path": ""})
-@app.route("/<path:path>")
-def serve(path):
-    """Serve the UI."""
-    if path != "" and os.path.exists(app.static_folder + "/" + path):
-        return send_from_directory(app.static_folder, path)
-    else:
-        return send_from_directory(app.static_folder, "_index.html")
-
-
-@app.route("/completion", methods=["POST"])
-@trace
-def completion():
+@app.post("/completion")
+async def completion(completion: CompletionRequest):
     """Handle a completion request from the prompt playground."""
 
     import openai
 
-    data = request.json
-    llm_settings = data["settings"]
-    user_env = data.get("userEnv", {})
+    trace_event("completion")
 
-    api_key = user_env.get("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY"))
+    api_key = completion.userEnv.get("OPENAI_API_KEY", os.environ.get("OPENAI_API_KEY"))
 
-    stop = llm_settings.pop("stop", None)
-    model_name = llm_settings.pop("model_name", None)
+    model_name = completion.settings.model_name
+    stop = completion.settings.stop
+    # OpenAI doesn't support an empty stop array, clear it
+    if isinstance(stop, list) and len(stop) == 0:
+        stop = None
 
     if model_name in ["gpt-3.5-turbo", "gpt-4"]:
-        response = openai.ChatCompletion.create(
+        response = await openai.ChatCompletion.acreate(
             api_key=api_key,
             model=model_name,
-            messages=[{"role": "user", "content": data["prompt"]}],
+            messages=[{"role": "user", "content": completion.prompt}],
             stop=stop,
-            **llm_settings,
+            **completion.settings.to_settings_dict(),
         )
-        return response["choices"][0]["message"]["content"]
+        return PlainTextResponse(content=response["choices"][0]["message"]["content"])
     else:
-        response = openai.Completion.create(
+        response = await openai.Completion.acreate(
             api_key=api_key,
             model=model_name,
-            prompt=data["prompt"],
+            prompt=completion.prompt,
             stop=stop,
-            **llm_settings,
+            **completion.settings.to_settings_dict(),
         )
-        return response["choices"][0]["text"]
+        return PlainTextResponse(content=response["choices"][0]["text"])
 
 
-@app.route("/project/settings", methods=["GET"])
-def project_settings():
+@app.get("/project/settings")
+async def project_settings():
     """Return project settings. This is called by the UI before the establishing the websocket connection."""
-    return {
-        "public": config.public,
-        "projectId": config.project_id,
-        "chainlitServer": config.chainlit_server,
-        "userEnv": config.user_env,
-        "hideCot": config.hide_cot,
-        "chainlitMd": get_markdown_str(config.root),
-        "prod": bool(config.chainlit_prod_url),
-        "appTitle": config.chatbot_name,
-        "github": config.github,
-    }
+    return JSONResponse(
+        content={
+            "chainlitServer": config.chainlit_server,
+            "prod": bool(config.chainlit_prod_url),
+            "ui": config.ui.to_dict(),
+            "project": config.project.to_dict(),
+            "markdown": get_markdown_str(config.root),
+        }
+    )
 
 
-@socketio.on("connect")
-def connect():
-    """Handle socket connection."""
-    session_id = request.sid
-    client = None
-    user_env = {}
+@app.put("/message/feedback")
+async def update_feedback(request: Request, update: UpdateFeedbackRequest):
+    """Update the human feedback for a particular message."""
 
-    if config.user_env:
-        # Check if requested user environment variables are provided
-        if request.headers.get("user-env"):
-            user_env = json.loads(request.headers.get("user-env"))
-            for key in config.user_env:
-                if key not in user_env:
-                    trace_event("missing_user_env")
-                    raise ConnectionRefusedError(
-                        "Missing user environment variable: " + key
-                    )
-
-    access_token = request.headers.get("Authorization")
-    if not config.public and not access_token:
-        # Refuse connection if the app is private and no access token is provided
-        trace_event("no_access_token")
-        raise ConnectionRefusedError("No access token provided")
-    elif access_token and config.project_id:
-        # Create the cloud client
-        client = CloudClient(
-            project_id=config.project_id,
-            session_id=session_id,
-            access_token=access_token,
-            url=config.chainlit_server,
-        )
-        is_project_member = client.is_project_member()
-        if not is_project_member:
-            raise ConnectionRefusedError("You are not a member of this project")
-
-    # Function to send a message to this particular session
-    def _emit(event, data):
-        socketio.emit(event, data, to=session_id)
-
-    # Function to ask the user a question
-    def _ask_user(data, timeout):
-        return socketio.call("ask", data, timeout=timeout, to=session_id)
-
-    session = {
-        "id": session_id,
-        "emit": _emit,
-        "ask_user": _ask_user,
-        "client": client,
-        "user_env": user_env,
-    }  # type: Session
-    sessions[session_id] = session
-
-    if not config.lc_factory and not config.on_message and not config.on_chat_start:
-        raise ValueError(
-            "Module should at least expose one of @langchain_factory, @on_message or @on_chat_start function"
-        )
-
-    if config.lc_factory:
-
-        def instantiate_agent(session):
-            """Instantiate the langchain agent and store it in the session."""
-            __chainlit_sdk__ = Chainlit(session)
-            agent = config.lc_factory()
-            session["agent"] = agent
-
-        # Instantiate the agent in a background task since the connection is not yet accepted
-        task = socketio.start_background_task(instantiate_agent, session)
-        session["task"] = task
-
-    if config.on_chat_start:
-
-        def _on_chat_start(session):
-            """Call the on_chat_start function provided by the developer."""
-            __chainlit_sdk__ = Chainlit(session)
-            config.on_chat_start()
-
-        # Send the ask in a backgroudn task since the connection is not yet accepted
-        task = socketio.start_background_task(_on_chat_start, session)
-        session["task"] = task
-
-    trace_event("connection_successful")
+    db_client = await get_db_client_from_request(request)
+    await db_client.set_human_feedback(
+        message_id=update.messageId, feedback=update.feedback
+    )
+    return JSONResponse(content={"success": True})
 
 
-@socketio.on("disconnect")
-def disconnect():
-    """Handle socket disconnection."""
+@app.get("/project/members")
+async def get_project_members(request: Request):
+    """Get all the members of a project."""
 
-    if request.sid in sessions:
-        # Clean up the session
-        session = sessions.pop(request.sid)
-        task = session.get("task")
-        if task:
-            # If a background task is running, kill it
-            task.kill()
-
-    if request.sid in user_sessions:
-        # Clean up the user session
-        user_sessions.pop(request.sid)
+    get_db_client = await get_db_client_from_request(request)
+    res = await get_db_client.get_project_members()
+    return JSONResponse(content=res)
 
 
-@socketio.on("stop")
-def stop():
-    """Handle a stop request from the client."""
-    trace_event("stop_task")
-    session = sessions.get(request.sid)
-    if not session:
-        return
+@app.get("/project/role")
+async def get_member_role(request: Request):
+    """Get the role of a member."""
 
-    task = session.get("task")
+    auth_client = await get_auth_client_from_request(request)
+    role = auth_client.user_infos["role"] if auth_client.user_infos else "ANONYMOUS"
+    return PlainTextResponse(content=role)
 
-    if task:
-        task.kill()
-        session["task"] = None
 
-        __chainlit_sdk__ = Chainlit(session)
+@app.post("/project/conversations")
+async def get_project_conversations(request: Request, payload: GetConversationsRequest):
+    """Get the conversations page by page."""
 
-        if config.on_stop:
-            config.on_stop()
+    db_client = await get_db_client_from_request(request)
+    res = await db_client.get_conversations(payload.pagination, payload.filter)
+    return JSONResponse(content=res.to_dict())
 
-        Message(author="System", content="Conversation stopped by the user.").send()
+
+@app.get("/project/conversation/{conversation_id}")
+async def get_conversation(request: Request, conversation_id: str):
+    """Get a specific conversation."""
+
+    db_client = await get_db_client_from_request(request)
+    res = await db_client.get_conversation(int(conversation_id))
+    return JSONResponse(content=res)
+
+
+@app.get("/project/conversation/{conversation_id}/element/{element_id}")
+async def get_conversation(request: Request, conversation_id: str, element_id: str):
+    """Get a specific conversation."""
+
+    db_client = await get_db_client_from_request(request)
+    res = await db_client.get_element(int(conversation_id), int(element_id))
+    return JSONResponse(content=res)
+
+
+@app.delete("/project/conversation")
+async def delete_conversation(request: Request, payload: DeleteConversationRequest):
+    """Delete a conversation."""
+
+    db_client = await get_db_client_from_request(request)
+    await db_client.delete_conversation(conversation_id=payload.conversationId)
+    return JSONResponse(content={"success": True})
+
+
+@app.get("/files/{filename:path}")
+async def serve_file(filename: str):
+    file_path = Path(config.project.local_fs_path) / filename
+    if file_path.is_file():
+        return FileResponse(file_path)
+    else:
+        return {"error": "File not found"}
+
+
+@app.get("/{path:path}")
+async def serve(path: str):
+    """Serve the UI and app files."""
+    if path:
+        app_file_path = os.path.join(config.root, path)
+        ui_file_path = os.path.join(build_dir, path)
+        file_paths = [app_file_path, ui_file_path]
+
+        for file_path in file_paths:
+            if os.path.isfile(file_path):
+                return FileResponse(file_path)
+
+    return HTMLResponse(content=html_template, status_code=200)
+
+
+# -------------------------------------------------------------------------------
+#                               WEBSOCKET HANDLERS
+# -------------------------------------------------------------------------------
 
 
 def need_session(id: str):
@@ -254,16 +334,130 @@ def need_session(id: str):
     return session
 
 
-def process_message(session: Session, author: str, input_str: str):
+@socket.on("connect")
+async def connect(sid, environ):
+    user_env = environ.get("HTTP_USER_ENV")
+    authorization = environ.get("HTTP_AUTHORIZATION")
+
+    try:
+        auth_client = await get_auth_client(authorization)
+        db_client = await get_db_client(authorization, auth_client.user_infos)
+
+        # Check user env
+        if config.project.user_env:
+            # Check if requested user environment variables are provided
+            if user_env:
+                user_env = json.loads(user_env)
+                for key in config.project.user_env:
+                    if key not in user_env:
+                        trace_event("missing_user_env")
+                        raise ConnectionRefusedError(
+                            "Missing user environment variable: " + key
+                        )
+            else:
+                raise ConnectionRefusedError("Missing user environment variables")
+
+    except ConnectionRefusedError as e:
+        logger.error(f"ConnectionRefusedError: {e}")
+        return False
+
+    # Function to send a message to this particular session
+    def emit_fn(event, data):
+        if sid in sessions:
+            if sessions[sid]["should_stop"]:
+                sessions[sid]["should_stop"] = False
+                raise InterruptedError("Task stopped by user")
+        return socket.emit(event, data, to=sid)
+
+    # Function to ask the user a question
+    def ask_user_fn(data, timeout):
+        if sessions[sid]["should_stop"]:
+            sessions[sid]["should_stop"] = False
+            raise InterruptedError("Task stopped by user")
+        return socket.call("ask", data, timeout=timeout, to=sid)
+
+    session = {
+        "id": sid,
+        "emit": emit_fn,
+        "ask_user": ask_user_fn,
+        "auth_client": auth_client,
+        "db_client": db_client,
+        "user_env": user_env,
+        "should_stop": False,
+    }  # type: Session
+
+    sessions[sid] = session
+
+    trace_event("connection_successful")
+    return True
+
+
+@socket.on("connection_successful")
+async def connection_successful(sid):
+    session = need_session(sid)
+    emitter_var.set(ChainlitEmitter(session))
+    loop_var.set(asyncio.get_event_loop())
+
+    if isinstance(
+        session["auth_client"], CloudAuthClient
+    ) and config.project.database in ["local", "custom"]:
+        await session["db_client"].create_user(session["auth_client"].user_infos)
+
+    if config.code.on_chat_start:
+        """Call the on_chat_start function provided by the developer."""
+        await config.code.on_chat_start()
+
+    if config.code.lc_factory:
+        """Instantiate the langchain agent and store it in the session."""
+        agent = await config.code.lc_factory()
+        session["agent"] = agent
+
+    if config.code.llama_index_factory:
+        llama_instance = await config.code.llama_index_factory()
+        session["llama_instance"] = llama_instance
+
+
+@socket.on("disconnect")
+async def disconnect(sid):
+    if sid in sessions:
+        # Clean up the session
+        sessions.pop(sid)
+
+    if sid in user_sessions:
+        # Clean up the user session
+        user_sessions.pop(sid)
+
+
+@socket.on("stop")
+async def stop(sid):
+    if sid in sessions:
+        trace_event("stop_task")
+        session = sessions[sid]
+
+        emitter_var.set(ChainlitEmitter(session))
+        loop_var.set(asyncio.get_event_loop())
+
+        await Message(author="System", content="Task stopped by the user.").send()
+
+        session["should_stop"] = True
+
+        if config.code.on_stop:
+            await config.code.on_stop()
+
+
+async def process_message(session: Session, author: str, input_str: str):
     """Process a message from the user."""
 
-    __chainlit_sdk__ = Chainlit(session)
     try:
-        __chainlit_sdk__.task_start()
+        emitter = ChainlitEmitter(session)
+        emitter_var.set(emitter)
+        loop_var.set(asyncio.get_event_loop())
 
-        if session["client"]:
+        await emitter.task_start()
+
+        if session["db_client"]:
             # If cloud is enabled, persist the message
-            session["client"].create_message(
+            await session["db_client"].create_message(
                 {
                     "author": author,
                     "content": input_str,
@@ -272,19 +466,28 @@ def process_message(session: Session, author: str, input_str: str):
             )
 
         langchain_agent = session.get("agent")
+        llama_instance = session.get("llama_instance")
+
         if langchain_agent:
+            from chainlit.lc.agent import run_langchain_agent
+
             # If a langchain agent is available, run it
-            if config.lc_run:
+            if config.code.lc_run:
                 # If the developer provided a custom run function, use it
-                config.lc_run(langchain_agent, input_str)
+                await config.code.lc_run(
+                    langchain_agent,
+                    input_str,
+                )
                 return
             else:
                 # Otherwise, use the default run function
-                raw_res, output_key = run_langchain_agent(langchain_agent, input_str)
+                raw_res, output_key = await run_langchain_agent(
+                    langchain_agent, input_str, use_async=config.code.lc_agent_is_async
+                )
 
-                if config.lc_postprocess:
+                if config.code.lc_postprocess:
                     # If the developer provided a custom postprocess function, use it
-                    config.lc_postprocess(raw_res)
+                    await config.code.lc_postprocess(raw_res)
                     return
                 elif output_key is not None:
                     # Use the output key if provided
@@ -293,54 +496,54 @@ def process_message(session: Session, author: str, input_str: str):
                     # Otherwise, use the raw response
                     res = raw_res
             # Finally, send the response to the user
-            Message(author=config.chatbot_name, content=res).send()
+            await Message(author=config.ui.name, content=res).send()
 
-        elif config.on_message:
+        elif llama_instance:
+            from chainlit.llama_index.run import run_llama
+
+            await run_llama(llama_instance, input_str)
+
+        elif config.code.on_message:
             # If no langchain agent is available, call the on_message function provided by the developer
-            config.on_message(input_str)
+            await config.code.on_message(input_str)
+    except InterruptedError:
+        pass
     except Exception as e:
         logger.exception(e)
-        ErrorMessage(author="Error", content=str(e)).send()
+        await ErrorMessage(
+            author="Error", content=str(e) or e.__class__.__name__
+        ).send()
     finally:
-        __chainlit_sdk__.task_end()
+        await emitter.task_end()
 
 
-@socketio.on("message")
-def on_message(body):
-    """Handle a message from the UI."""
+@socket.on("ui_message")
+async def message(sid, data):
+    """Handle a message sent by the User."""
+    session = need_session(sid)
+    session["should_stop"] = False
 
-    session_id = request.sid
-    session = need_session(session_id)
+    input_str = data["content"].strip()
+    author = data["author"]
 
-    input_str = body["content"].strip()
-    author = body["author"]
-
-    task = socketio.start_background_task(process_message, session, author, input_str)
-    session["task"] = task
-    task.join()
-    session["task"] = None
-
-    return {"success": True}
+    await process_message(session, author, input_str)
 
 
-def process_action(session: Session, action: Action):
-    __chainlit_sdk__ = Chainlit(session)
-    callback = config.action_callbacks.get(action.name)
+async def process_action(action: Action):
+    callback = config.code.action_callbacks.get(action.name)
     if callback:
-        callback(action)
+        await callback(action)
     else:
         logger.warning("No callback found for action %s", action.name)
 
 
-@socketio.on("call_action")
-def call_action(action):
+@socket.on("action_call")
+async def call_action(sid, action):
     """Handle an action call from the UI."""
-    session_id = request.sid
-    session = need_session(session_id)
+    session = need_session(sid)
+    emitter_var.set(ChainlitEmitter(session))
+    loop_var.set(asyncio.get_event_loop())
 
     action = Action(**action)
 
-    task = socketio.start_background_task(process_action, session, action)
-    session["task"] = task
-    task.join()
-    session["task"] = None
+    await process_action(action)

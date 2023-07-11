@@ -1,26 +1,26 @@
+import { useEffect, useRef, useState } from 'react';
+import { Link, useLocation } from 'react-router-dom';
 import { useRecoilValue } from 'recoil';
-import { projectSettingsState } from 'state/project';
+
+import MenuIcon from '@mui/icons-material/Menu';
 import {
+  AppBar,
   Box,
   Button,
   IconButton,
+  Menu,
   Stack,
-  Tooltip,
-  AppBar,
   Toolbar,
-  useTheme,
-  Menu
+  useTheme
 } from '@mui/material';
-import { Link, useLocation } from 'react-router-dom';
-import UserAvatar from 'components/userAvatar';
-import KeyIcon from '@mui/icons-material/Key';
-import ThemeButton from 'components/themeButton';
-import NewChatButton from 'components/newChatButton';
+import useMediaQuery from '@mui/material/useMediaQuery';
+
 import RegularButton from 'components/button';
 import GithubButton from 'components/githubButton';
-import useMediaQuery from '@mui/material/useMediaQuery';
-import MenuIcon from '@mui/icons-material/Menu';
-import { useEffect, useRef, useState } from 'react';
+import NewChatButton from 'components/newChatButton';
+import UserButton from 'components/userButton';
+
+import { projectSettingsState } from 'state/project';
 
 interface INavItem {
   to: string;
@@ -55,11 +55,11 @@ function NavItem({ to, label }: INavItem) {
 }
 
 interface NavProps {
-  isPublic?: boolean;
+  hasDb?: boolean;
   hasReadme?: boolean;
 }
 
-function Nav({ isPublic, hasReadme }: NavProps) {
+function Nav({ hasDb, hasReadme }: NavProps) {
   const location = useLocation();
   const theme = useTheme();
   const [open, setOpen] = useState(false);
@@ -78,7 +78,7 @@ function Nav({ isPublic, hasReadme }: NavProps) {
 
   const tabs = [{ to: '/', label: 'Chat' }];
 
-  if (isPublic === false) {
+  if (hasDb) {
     tabs.push({ to: '/dataset', label: 'History' });
   }
 
@@ -144,7 +144,6 @@ function Nav({ isPublic, hasReadme }: NavProps) {
 
 export default function Header() {
   const pSettings = useRecoilValue(projectSettingsState);
-  const requiredKeys = !!pSettings?.userEnv?.length;
 
   return (
     <AppBar elevation={0} color="transparent" position="static">
@@ -159,8 +158,8 @@ export default function Header() {
       >
         <Stack alignItems="center" direction="row">
           <Nav
-            isPublic={pSettings?.public}
-            hasReadme={!!pSettings?.chainlitMd}
+            hasDb={!!pSettings?.project?.database}
+            hasReadme={!!pSettings?.markdown}
           />
         </Stack>
         <Stack
@@ -172,16 +171,8 @@ export default function Header() {
         >
           <NewChatButton />
           <Box ml={1} />
-          {requiredKeys && (
-            <Tooltip title="API keys">
-              <IconButton color="inherit" component={Link} to="/env">
-                <KeyIcon />
-              </IconButton>
-            </Tooltip>
-          )}
-          <ThemeButton />
-          <GithubButton href={pSettings?.github} />
-          <UserAvatar />
+          <GithubButton href={pSettings?.ui?.github} />
+          <UserButton />
         </Stack>
       </Toolbar>
     </AppBar>

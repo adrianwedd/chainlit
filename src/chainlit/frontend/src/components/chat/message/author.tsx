@@ -1,7 +1,14 @@
-import { Box, Tooltip, Typography } from '@mui/material';
-import MessageTime from './time';
 import { useColorForName } from 'helpers/color';
+import { useRecoilValue } from 'recoil';
+
+import { Box, Tooltip, Typography } from '@mui/material';
+
+import AvatarElement from 'components/element/avatar';
+
 import { IMessage } from 'state/chat';
+import { IAvatarElement, elementState } from 'state/element';
+
+import MessageTime from './time';
 
 interface Props {
   message: IMessage;
@@ -12,6 +19,16 @@ export const authorBoxWidth = 70;
 
 export default function Author({ message, show }: Props) {
   const getColorForName = useColorForName();
+  const elements = useRecoilValue(elementState);
+  const avatars = elements.filter((e) => e.type === 'avatar');
+  const avatarEl = avatars.find((e) => e.name === message.author);
+
+  const avatar = show && avatarEl && (
+    <AvatarElement
+      element={avatarEl as IAvatarElement}
+      author={message.author}
+    />
+  );
 
   const name = show && (
     <Tooltip title={message.author}>
@@ -35,10 +52,12 @@ export default function Author({ message, show }: Props) {
     </Tooltip>
   );
 
+  const display = avatar || name;
+
   return (
     <>
       <Box width={authorBoxWidth} pr={2}>
-        {name}
+        {display}
         <MessageTime timestamp={message.createdAt} />
       </Box>
       {!!message.indent && (
